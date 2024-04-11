@@ -1,198 +1,196 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #include <string.h>
 #include <dirent.h>
+#include <ctype.h>
+#include <unistd.h>
 #include <sys/stat.h>
 #include <sys/types.h>
-#include <unistd.h>
-#include <time.h>
 
-#define MAX_FILENAME_LENGTH 256
-#define MAX_CONTENT_LENGTH 4096
-#define MAX_METADATA_LENGTH 1024
-#define MAX_PATH_LENGTH 1000
-
-struct Metadata {
-    mode_t permissions;
-    uid_t owner;
-    time_t mtime;
-    off_t size;
-};
-
-
-void captureMetadata(const char *dir_path, FILE *snapshot_file) {
-    DIR *dir = opendir(dir_path);
-    if (dir == NULL) {
-        perror("Error opening directory");
-        exit(EXIT_FAILURE);
-    }
-
-    struct dirent *entry;
-    while ((entry = readdir(dir)) != NULL) {
-        if (strcmp(entry->d_name, ".") != 0 && strcmp(entry->d_name, "..") != 0) {
-            char full_path[MAX_PATH_LENGTH];
-            snprintf(full_path, MAX_PATH_LENGTH, "%s/%s", dir_path, entry->d_name);
-
-            struct stat file_stat;
-            if (lstat(full_path, &file_stat) == -1) {
-                perror("Error getting file stats");
-                exit(EXIT_FAILURE);
-            }
-
-            if (strcmp(entry->d_name, "snapshot.txt") != 0) {
-                struct Metadata metadata;
-                metadata.permissions = file_stat.st_mode;
-                metadata.owner = file_stat.st_uid;
-                metadata.mtime = file_stat.st_mtime;
-                metadata.size = file_stat.st_size;
-
-                fprintf(snapshot_file, "%s - Permissions: %o, Owner: %d, Mtime: %ld, Size: %ld\n",
-                        entry->d_name, metadata.permissions, metadata.owner, metadata.mtime, metadata.size);
-            }
-        }
-    }
-
-    closedir(dir);
-}
+#define SEP "/"
 
 typedef struct {
-    char *Permissions;
-    char *Owner;
-    char *Mtime;
-    char *Size;
+    char filename[256],
+    permissions[6],
+    owner[5],
+    modify[26],
+    size[5];
 } Metadata;
 
-void parse_file(FILE *file, Metadata **parsed_data, int *num_files) {
-    char content[MAX_CONTENT_LENGTH];
-    fgets(content, MAX_CONTENT_LENGTH, file);
-    char *line = strtok(content, "\n");
-    *parsed_data = malloc(sizeof(Metadata) * MAX_METADATA_LENGTH);
-    *num_files = 0;
-    while ((line = strtok(NULL, "\n")) != NULL) {
-        char *token = strtok(line, " - ");
-        if (token == NULL)
+
+Metadata* parse_file(FILE* file) {
+    const int MAX_LINE_LENGTH = sizeof(Metadata) + 42;
+
+    int sec_line_pos;
+    int nb_line = -1;
+    while(!feof(file)) {
+        if (getc(file) == '\n') {
+            nb_line++;
+            if (nb_line == 1) sec_line_pos = ftell(file);
+    }}
+    fseek(file, sec_line_pos, SEEK_SET);
+
+    Metadata* fileInfo = malloc(nb_line * sizeof(Metadata));
+    char line[MAX_LINE_LENGTH];
+    
+    int count = 0;
+    while (fgets(line, MAX_LINE_LENGTH, file)) {
+        char* metadata = strrchr(line, '-');
+
+        if (metadata == NULL || sscanf(metadata, "- Permissions: %5s, Owner: %4s, Modify: %[^,], Size: %4s\n", 
+            fileInfo[count].permissions, fileInfo[count].owner, fileInfo[count].modify, fileInfo[count].size) != 4) {
+            
+            printf("Error for line: %s", line);
             continue;
-        char *filename = strdup(token);
-        token = strtok(NULL, " - ");
-        Metadata temp_metadata;
-        while (token != NULL) {
-            char *key = strtok(token, ": ");
-            char *value = strtok(NULL, ": ");
-            if (strcmp(key, "Permissions") == 0) {
-                temp_metadata.Permissions = strdup(value);
-            } else if (strcmp(key, "Owner") == 0) {
-                temp_metadata.Owner = strdup(value);
-            } else if (strcmp(key, "Mtime") == 0) {
-                temp_metadata.Mtime = strdup(value);
-            } else if (strcmp(key, "Size") == 0) {
-                temp_metadata.Size = strdup(value);
-            }
-            token = strtok(NULL, ", ");
         }
-        (*parsed_data)[*num_files] = temp_metadata;
-        (*num_files)++;
+        int filename_length = metadata - line - 1;
+        strncpy(fileInfo[count].filename, line, filename_length);
+        fileInfo[count++].filename[filename_length] = '\0';
+    }
+    
+    fileInfo[count].filename[0] = '\0';
+    return fileInfo;
+}
+
+void delete_element(Metadata* fileInfo, const int index) {
+    for (int i = index; fileInfo[i].filename[0]!='\0'; i++) {
+        strcpy(fileInfo[i].filename, fileInfo[i+1].filename);
+        strcpy(fileInfo[i].permissions, fileInfo[i+1].permissions);
+        strcpy(fileInfo[i].owner, fileInfo[i+1].owner);
+        strcpy(fileInfo[i].modify, fileInfo[i+1].modify);
+        strcpy(fileInfo[i].size, fileInfo[i+1].size);
     }
 }
 
-void compareMetadata(const char *dir_path, FILE *snapshot_file) {
-    FILE *snapshot_file_copy = tmpfile();
-    rewind(snapshot_file);
-    char line[MAX_CONTENT_LENGTH];
-    while (fgets(line, sizeof(line), snapshot_file) != NULL) {
-        fputs(line, snapshot_file_copy);
+void compareMetadata(const char* dir_path, const int origin_path_length) {
+    FILE* snapshot_file;
+    bool initialize = false;
+    Metadata* parsed_file = malloc(1);
+    parsed_file[0].filename[0] = '\0';
+
+    char snapshot_path[strlen(dir_path)+14];
+    strcpy(snapshot_path, dir_path);
+    if (snapshot_path[strlen(dir_path)-1]!=SEP[0]) strcat(snapshot_path, SEP);
+    strcat(snapshot_path, "snapshot.txt");
+    
+    if (access(snapshot_path, F_OK) == 0) {
+        snapshot_file = fopen(snapshot_path, "r+");
+    } else {
+        initialize = true;
+        snapshot_file = fopen(snapshot_path, "w+");
+        printf("Directory initialization...\n");
     }
-    rewind(snapshot_file_copy);
+    if (snapshot_file == NULL) fprintf(stderr, "Erreur lors de l'ouverture ou la création du fichier.\n");
 
-    Metadata *parse;
-    int num_files;
-    parse_file(snapshot_file_copy, &parse, &num_files);
+    if (!initialize) {
+        free(parsed_file);
+        parsed_file = parse_file(snapshot_file);
+        for (int i = 0; parsed_file[i].filename[0]!='\0'; i++) {
+            char filename[256];
+            strcpy(filename, parsed_file[i].filename);
 
-    rewind(snapshot_file);
-    rewind(snapshot_file_copy);
+            char type[10];
+            if (S_ISDIR(atoi(parsed_file[i].permissions))) strcpy(type, "directory");
+            else strcpy(type, "file");
 
-    struct dirent *entry;
-    DIR *dp = opendir(dir_path);
-    if (dp == NULL) {
-        fprintf(stderr, "Cannot open directory %s\n", dir_path);
-        exit(EXIT_FAILURE);
-    }
+            char path_file[strlen(dir_path)+strlen(filename)+2];
+            strcpy(path_file, dir_path);
+            if (path_file[strlen(dir_path)-1]!=SEP[0]) strcat(path_file, SEP);
+            strcat(path_file, filename);
+            
 
-    struct stat stats;
-    while ((entry = readdir(dp)) != NULL) {
-        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0 || strcmp(entry->d_name, "snapshot.txt") == 0) {
-            continue;
-        }
+            if (!access(path_file, F_OK)) {
+                printf("%c%s %s has been deleted.\n", toupper(type[0]), type+1, filename+origin_path_length);
+                delete_element(parsed_file, i--);
+                continue;
+            }
 
-        char filepath[MAX_FILENAME_LENGTH];
-        snprintf(filepath, sizeof(filepath), "%s/%s", dir_path, entry->d_name);
-
-        if (stat(filepath, &stats) == -1) {
-            perror("stat");
-            exit(EXIT_FAILURE);
-        }
-
-        int i;
-        for (i = 0; i < num_files; i++) {
-            if (strcmp(entry->d_name, "snapshot.txt") != 0 && strcmp(entry->d_name, "snapshot.txt\n") != 0) {
-                if (strcmp(entry->d_name, parse[i].Permissions) != 0) {
-                    fprintf(snapshot_file, "File %s has been deleted.\n", entry->d_name);
-                    break;
-                }
-
-                if (strcmp(entry->d_name, parse[i].Owner) != 0) {
-                    fprintf(snapshot_file, "Owner of file %s has been changed.\n", entry->d_name);
-                    break;
-                }
-
-                if (strcmp(entry->d_name, parse[i].Mtime) != 0 || strcmp(entry->d_name, parse[i].Size) != 0) {
-                    fprintf(snapshot_file, "File %s has been modified.\n", entry->d_name);
-                    break;
-                }
+            struct stat stats;
+            lstat(path_file, &stats);
+            if (atoi(parsed_file[i].permissions) != stats.st_mode) {
+                sprintf(parsed_file[i].permissions, "%d", stats.st_mode);
+                printf("Permissions of %s %s have been modified.\n", type, filename+origin_path_length);
+            }
+            if (atoi(parsed_file[i].owner) != stats.st_uid) {
+                sprintf(parsed_file[i].owner, "%d", stats.st_uid);
+                printf("Owner of %s %s has been changed.\n", type, filename+origin_path_length);
+            }
+            if (atol(parsed_file[i].modify) != stats.st_mtime || atol(parsed_file[i].size) != stats.st_size) {
+                sprintf(parsed_file[i].modify, "%ld", stats.st_mtime);
+                sprintf(parsed_file[i].size, "%ld", stats.st_size);
+                printf("%c%s %s has been modified.\n", toupper(type[0]), type+1, filename+origin_path_length);
             }
         }
     }
+    DIR* dir = opendir(dir_path);
+    struct dirent* dir_entry;
+    while((dir_entry = readdir(dir)) != NULL) {
+        char* name = dir_entry->d_name;
+        if (strcmp(name, "snapshot.txt") == 0) continue;
 
-    closedir(dp);
-    fclose(snapshot_file_copy);
+        char path_file[strlen(dir_path)+strlen(name)+2];
+        strcpy(path_file, dir_path);
+        if (path_file[strlen(dir_path)-1]!=SEP[0]) strcat(path_file, SEP);
+        strcat(path_file, name);
 
-    int i;
-    for (i = 0; i < num_files; i++) {
-        free(parse[i].Permissions);
-        free(parse[i].Owner);
-        free(parse[i].Mtime);
-        free(parse[i].Size);
+        struct stat stats;
+        lstat(path_file, &stats);
+        if (S_ISDIR(stats.st_mode)) {
+            if (!initialize) {
+                char next_snapshot_path[strlen(path_file)+13];
+                sprintf(next_snapshot_path, "%s/snapshot.txt", path_file);
+                FILE* temp = fopen(next_snapshot_path, "a");
+                fclose(temp);
+            }
+            compareMetadata(path_file, origin_path_length);
+        }
+        bool isFileSaved = false;
+        int length;
+        for (int i = 0; parsed_file[i].filename[0] != '\0'; i++) {
+            if (strcmp(parsed_file[i].filename, name) == 0) {
+                isFileSaved = true;
+            }
+            length = i + 2;
+        }
+        if (!isFileSaved) {
+            if (!initialize){
+                char type[10];
+                if (S_ISDIR(stats.st_mode)) strcpy(type, "Directory");
+                else strcpy(type, "File");
+                printf("%s %s has been created.\n", type, path_file+origin_path_length);
+            }
+            parsed_file = realloc(parsed_file, (length+1)*sizeof(Metadata));
+            strcpy(parsed_file[length-1].filename, name);
+            sprintf(parsed_file[length-1].permissions, "%d", stats.st_mode);
+            sprintf(parsed_file[length-1].owner, "%d", stats.st_uid);
+            sprintf(parsed_file[length-1].modify, "%ld", stats.st_mtime);
+            sprintf(parsed_file[length-1].size, "%ld", stats.st_size);
+
+            parsed_file[length].filename[0] = '\0';
+        }
     }
-    free(parse);
+    rewind(snapshot_file);
+    fprintf(snapshot_file, "Snapshot for directory: %s\n", dir_path);
+    fprintf(snapshot_file, "---------------------------------------\n");
+    for (int i = 0; parsed_file[i].filename[0] != '\0'; i++)
+        fprintf(snapshot_file, "%s - Permissions: %s, Owner: %s, Modify: %s, Size: %s\n",
+        parsed_file[i].filename, parsed_file[i].permissions, parsed_file[i].owner, parsed_file[i].modify, parsed_file[i].size);
+    
+    free(parsed_file);
+    fflush(snapshot_file);
+    ftruncate(fileno(snapshot_file), ftell(snapshot_file));
+    fclose(snapshot_file);
 }
-
 
 int main(int argc, char *argv[]) {
-    if (argc != 2) {
-        fprintf(stderr, "Usage: %s <directory_path>\n", argv[0]);
-        return EXIT_FAILURE;
-    }
-
-    const char *dir_path = argv[1];
-    char snapshot_path[MAX_PATH_LENGTH];
-    snprintf(snapshot_path, MAX_PATH_LENGTH, "%s/snapshot.txt", dir_path);
-
-    FILE *snapshot_file = fopen(snapshot_path, "r+");
-    if (snapshot_file == NULL) {
-        perror("Error opening snapshot file");
-        exit(EXIT_FAILURE);
-    }
-
-    fseek(snapshot_file, 0, SEEK_END);
-    if (ftell(snapshot_file) == 0) {
-        fprintf(snapshot_file, "Snapshot for directory: %s\n", dir_path);
-        fprintf(snapshot_file, "---------------------------------------\n");
-        captureMetadata(dir_path, snapshot_file);
-        printf("Initial snapshot captured.\n");
+    if(argc >= 2) {
+        int length;
+        if (argv[1][strlen(argv[1]-1)] == '/') length = strlen(argv[1]);
+        else length = strlen(argv[1]) + 1;
+        compareMetadata(argv[1], length);
     } else {
-        rewind(snapshot_file);
-        compareMetadata(dir_path, snapshot_file);
+        printf("Aucun argument n'a été passé.\n");
     }
-
-    fclose(snapshot_file);
-    return EXIT_SUCCESS;
+    return 0;
 }
