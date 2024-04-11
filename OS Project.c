@@ -7,6 +7,7 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <limits.h>
 
 #define SEP "/"
 
@@ -64,7 +65,7 @@ void delete_element(Metadata* fileInfo, const int index) {
     }
 }
 
-void compareMetadata(const char* dir_path, const int origin_path_length) {
+void compareMetadata(const char* dir_path, const int origin_path_length, FILE* output) {
     FILE* snapshot_file;
     bool initialize = false;
     Metadata* parsed_file = malloc(1);
@@ -80,9 +81,9 @@ void compareMetadata(const char* dir_path, const int origin_path_length) {
     } else {
         initialize = true;
         snapshot_file = fopen(snapshot_path, "w+");
-        printf("Directory initialization...\n");
+        printf("Directory %s is initialized...\n", dir_path);
     }
-    if (snapshot_file == NULL) fprintf(stderr, "Erreur lors de l'ouverture ou la création du fichier.\n");
+    if (snapshot_file == NULL) fprintf(stderr, "Error during the opening or the creation of the file.\n");
 
     if (!initialize) {
         free(parsed_file);
@@ -128,7 +129,7 @@ void compareMetadata(const char* dir_path, const int origin_path_length) {
     struct dirent* dir_entry;
     while((dir_entry = readdir(dir)) != NULL) {
         char* name = dir_entry->d_name;
-        if (strcmp(name, "snapshot.txt") == 0 || name[0] == '.') continue;
+        if (strcmp(name, "snapshot.txt") == 0 || strcmp(name, "..") == 0 || strcmp(name, ".") == 0) continue;
 
         char path_file[strlen(dir_path)+strlen(name)+2];
         strcpy(path_file, dir_path);
@@ -140,11 +141,11 @@ void compareMetadata(const char* dir_path, const int origin_path_length) {
         if (S_ISDIR(stats.st_mode)) {
             if (!initialize) {
                 char next_snapshot_path[strlen(path_file)+13];
-                sprintf(next_snapshot_path, "%s/snapshot.txt", path_file);
+                sprintf(next_snapshot_path, "%s%ssnapshot.txt", path_file, SEP);
                 FILE* temp = fopen(next_snapshot_path, "a");
                 fclose(temp);
             }
-            compareMetadata(path_file, origin_path_length);
+            compareMetadata(path_file, origin_path_length, output);
         }
         bool isFileSaved = false;
         int length = 1;
@@ -174,10 +175,17 @@ void compareMetadata(const char* dir_path, const int origin_path_length) {
     rewind(snapshot_file);
     fprintf(snapshot_file, "Snapshot for directory: %s\n", dir_path);
     fprintf(snapshot_file, "---------------------------------------\n");
-    for (int i = 0; parsed_file[i].filename[0] != '\0'; i++)
-        fprintf(snapshot_file, "%s - Permissions: %s, Owner: %s, Modify: %s, Size: %s\n",
-        parsed_file[i].filename, parsed_file[i].permissions, parsed_file[i].owner, parsed_file[i].modify, parsed_file[i].size);
-    
+    for (int i = 0; parsed_file[i].filename[0] != '\0'; i++) {
+        fprintf(snapshot_file, "%s - Permissions: %s, Owner: %s, Modify: %s, Size: %s\n", parsed_file[i].filename,
+        parsed_file[i].permissions, parsed_file[i].owner, parsed_file[i].modify, parsed_file[i].size);
+
+        char abs_path[PATH_MAX];
+        realpath(dir_path, abs_path);
+        strcat(abs_path, SEP);
+        strcat(abs_path, parsed_file[i].filename);
+        fprintf(output, "%s - Permissions: %s, Owner: %s, Modify: %s, Size: %s\n", abs_path,
+        parsed_file[i].permissions, parsed_file[i].owner, parsed_file[i].modify, parsed_file[i].size);
+    }
     free(parsed_file);
     fflush(snapshot_file);
     ftruncate(fileno(snapshot_file), ftell(snapshot_file));
@@ -186,12 +194,31 @@ void compareMetadata(const char* dir_path, const int origin_path_length) {
 
 int main(int argc, char *argv[]) {
     if(argc >= 2) {
-        int length;
-        if (argv[1][strlen(argv[1]-1)] == '/') length = strlen(argv[1]);
-        else length = strlen(argv[1]) + 1;
-        compareMetadata(argv[1], length);
+        int start = 1;
+        FILE* output = NULL;
+        if (strcmp(argv[1], "-o") == 0) {
+            switch (argc) {
+            case 2:
+                printf("No output specified.\n");
+                return -1;
+
+            case 3:
+                printf("No input specified.\n");
+                return -1;
+            }
+            start = 3;
+            output = fopen(argv[2], "w");
+        }
+        for (int i = start; i < argc; i++) {
+            int length;
+            if (argv[1][strlen(argv[i]-1)] == SEP[0]) length = strlen(argv[i]);
+            else length = strlen(argv[i]) + 1;
+            compareMetadata(argv[i], length, output);
+        }
+        if (output != NULL) fclose(output);
     } else {
-        printf("Aucun argument n'a été passé.\n");
+        printf("No argument has been used.\n");
+        return -1;
     }
     return 0;
 }
