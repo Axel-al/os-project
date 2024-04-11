@@ -31,6 +31,7 @@ Metadata* parse_file(FILE* file) {
     }}
     fseek(file, sec_line_pos, SEEK_SET);
 
+    if (nb_line < 1) nb_line = 1;
     Metadata* fileInfo = malloc(nb_line * sizeof(Metadata));
     char line[MAX_LINE_LENGTH];
     
