@@ -15,7 +15,7 @@ typedef struct {
     permissions[6],
     owner[5],
     modify[26],
-    size[5];
+    size[26];
 } Metadata;
 
 
@@ -38,7 +38,7 @@ Metadata* parse_file(FILE* file) {
     while (fgets(line, MAX_LINE_LENGTH, file)) {
         char* metadata = strrchr(line, '-');
 
-        if (metadata == NULL || sscanf(metadata, "- Permissions: %5s, Owner: %4s, Modify: %[^,], Size: %4s\n", 
+        if (metadata == NULL || sscanf(metadata, "- Permissions: %5s, Owner: %4s, Modify: %[^,], Size: %[^\n]\n", 
             fileInfo[count].permissions, fileInfo[count].owner, fileInfo[count].modify, fileInfo[count].size) != 4) {
             
             printf("Error for line: %s", line);
@@ -100,8 +100,8 @@ void compareMetadata(const char* dir_path, const int origin_path_length) {
             strcat(path_file, filename);
             
 
-            if (!access(path_file, F_OK)) {
-                printf("%c%s %s has been deleted.\n", toupper(type[0]), type+1, filename+origin_path_length);
+            if (access(path_file, F_OK) != 0) {
+                printf("%c%s %s has been deleted.\n", toupper(type[0]), type+1, path_file+origin_path_length);
                 delete_element(parsed_file, i--);
                 continue;
             }
@@ -110,16 +110,16 @@ void compareMetadata(const char* dir_path, const int origin_path_length) {
             lstat(path_file, &stats);
             if (atoi(parsed_file[i].permissions) != stats.st_mode) {
                 sprintf(parsed_file[i].permissions, "%d", stats.st_mode);
-                printf("Permissions of %s %s have been modified.\n", type, filename+origin_path_length);
+                printf("Permissions of %s %s have been modified.\n", type, path_file+origin_path_length);
             }
             if (atoi(parsed_file[i].owner) != stats.st_uid) {
                 sprintf(parsed_file[i].owner, "%d", stats.st_uid);
-                printf("Owner of %s %s has been changed.\n", type, filename+origin_path_length);
+                printf("Owner of %s %s has been changed.\n", type, path_file+origin_path_length);
             }
             if (atol(parsed_file[i].modify) != stats.st_mtime || atol(parsed_file[i].size) != stats.st_size) {
                 sprintf(parsed_file[i].modify, "%ld", stats.st_mtime);
                 sprintf(parsed_file[i].size, "%ld", stats.st_size);
-                printf("%c%s %s has been modified.\n", toupper(type[0]), type+1, filename+origin_path_length);
+                printf("%c%s %s has been modified.\n", toupper(type[0]), type+1, path_file+origin_path_length);
             }
         }
     }
@@ -127,7 +127,7 @@ void compareMetadata(const char* dir_path, const int origin_path_length) {
     struct dirent* dir_entry;
     while((dir_entry = readdir(dir)) != NULL) {
         char* name = dir_entry->d_name;
-        if (strcmp(name, "snapshot.txt") == 0) continue;
+        if (strcmp(name, "snapshot.txt") == 0 || name[0] == '.') continue;
 
         char path_file[strlen(dir_path)+strlen(name)+2];
         strcpy(path_file, dir_path);
@@ -146,7 +146,7 @@ void compareMetadata(const char* dir_path, const int origin_path_length) {
             compareMetadata(path_file, origin_path_length);
         }
         bool isFileSaved = false;
-        int length;
+        int length = 1;
         for (int i = 0; parsed_file[i].filename[0] != '\0'; i++) {
             if (strcmp(parsed_file[i].filename, name) == 0) {
                 isFileSaved = true;
