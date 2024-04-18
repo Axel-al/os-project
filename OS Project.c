@@ -7,12 +7,14 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <limits.h>
 
+#define MAX_FILENAME_LENGTH 256
 #define SEP "/"
 
 typedef struct {
-    char filename[256],
+    char filename[MAX_FILENAME_LENGTH],
     permissions[6],
     owner[5],
     modify[26],
@@ -65,7 +67,7 @@ void delete_element(Metadata* fileInfo, const int index) {
     }
 }
 
-void compareMetadata(const char* dir_path, const int origin_path_length, FILE* output) {
+int compareMetadata(const char* dir_path, const int origin_path_length, FILE* output) {
     FILE* snapshot_file;
     bool initialize = false;
     Metadata* parsed_file = malloc(1);
@@ -83,13 +85,16 @@ void compareMetadata(const char* dir_path, const int origin_path_length, FILE* o
         snapshot_file = fopen(snapshot_path, "w+");
         printf("Directory %s is initialized...\n", dir_path);
     }
-    if (snapshot_file == NULL) fprintf(stderr, "Error during the opening or the creation of the file.\n");
+    if (snapshot_file == NULL) {
+        printf("Error during the opening or the creation of the file in directory %s.\n", dir_path);
+        return -1;
+    }
 
     if (!initialize) {
         free(parsed_file);
         parsed_file = parse_file(snapshot_file);
         for (int i = 0; parsed_file[i].filename[0]!='\0'; i++) {
-            char filename[256];
+            char filename[MAX_FILENAME_LENGTH];
             strcpy(filename, parsed_file[i].filename);
 
             char type[10];
@@ -172,29 +177,35 @@ void compareMetadata(const char* dir_path, const int origin_path_length, FILE* o
             parsed_file[length].filename[0] = '\0';
         }
     }
+    closedir(dir);
+
     rewind(snapshot_file);
     fprintf(snapshot_file, "Snapshot for directory: %s\n", dir_path);
     fprintf(snapshot_file, "---------------------------------------\n");
     for (int i = 0; parsed_file[i].filename[0] != '\0'; i++) {
         fprintf(snapshot_file, "%s - Permissions: %s, Owner: %s, Modify: %s, Size: %s\n", parsed_file[i].filename,
         parsed_file[i].permissions, parsed_file[i].owner, parsed_file[i].modify, parsed_file[i].size);
-
-        char abs_path[PATH_MAX];
-        realpath(dir_path, abs_path);
-        strcat(abs_path, SEP);
-        strcat(abs_path, parsed_file[i].filename);
-        fprintf(output, "%s - Permissions: %s, Owner: %s, Modify: %s, Size: %s\n", abs_path,
-        parsed_file[i].permissions, parsed_file[i].owner, parsed_file[i].modify, parsed_file[i].size);
+        
+        if (output != NULL) {
+            char abs_path[PATH_MAX+1];
+            realpath(dir_path, abs_path);
+            strcat(abs_path, SEP);
+            strcat(abs_path, parsed_file[i].filename);
+            fprintf(output, "%s - Permissions: %s, Owner: %s, Modify: %s, Size: %s\n", abs_path,
+            parsed_file[i].permissions, parsed_file[i].owner, parsed_file[i].modify, parsed_file[i].size);
+        }
     }
     free(parsed_file);
     fflush(snapshot_file);
     ftruncate(fileno(snapshot_file), ftell(snapshot_file));
     fclose(snapshot_file);
+    return 0;
 }
 
 int main(int argc, char *argv[]) {
+    int start = 1;
+    int lpid[argc-1];
     if(argc >= 2) {
-        int start = 1;
         FILE* output = NULL;
         if (strcmp(argv[1], "-o") == 0) {
             switch (argc) {
@@ -210,15 +221,37 @@ int main(int argc, char *argv[]) {
             output = fopen(argv[2], "w");
         }
         for (int i = start; i < argc; i++) {
-            int length;
-            if (argv[1][strlen(argv[i]-1)] == SEP[0]) length = strlen(argv[i]);
-            else length = strlen(argv[i]) + 1;
-            compareMetadata(argv[i], length, output);
+            int pid = fork();
+            lpid[i - start] = pid;
+            if (pid < 0) {
+                printf("Error in the opening of the process for %s.\n", argv[i]);
+                return -1;
+            } else if (pid == 0) {
+                int length;
+                if (argv[1][strlen(argv[i]-1)] == SEP[0]) length = strlen(argv[i]);
+                else length = strlen(argv[i]) + 1;
+                int error;
+                if ((error = compareMetadata(argv[i], length, output)) != 0) {
+                    printf("Error during the creation of snapshot for directory %s.\n", argv[i]);
+                    printf("%d\n", error);
+                    error=-2;
+                    exit(error);
+                } else {
+                    printf("Snapshot for directory %s created succesfully.\n", argv[i]);
+                    exit(0);
+                }
+            }
         }
         if (output != NULL) fclose(output);
     } else {
         printf("No argument has been used.\n");
         return -1;
     }
+    for (int i = 0; i < argc - start; i++) {
+        int status;
+        int wpid = waitpid(lpid[i], &status, 0);
+        printf("Child Process %d terminated with PID %d and exit code %d.\n", i+1, wpid, WEXITSTATUS(status));
+    }
+
     return 0;
 }
