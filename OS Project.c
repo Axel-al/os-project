@@ -67,7 +67,7 @@ void delete_element(Metadata* fileInfo, const int index) {
     }
 }
 
-int compareMetadata(const char* dir_path, const int origin_path_length, FILE* output) {
+int compareMetadata(const char* dir_path, const int origin_path_length, FILE* output, const char* isolated_space) {
     FILE* snapshot_file;
     bool initialize = false;
     Metadata* parsed_file = malloc(1);
@@ -143,6 +143,35 @@ int compareMetadata(const char* dir_path, const int origin_path_length, FILE* ou
 
         struct stat stats;
         lstat(path_file, &stats);
+        if ((stats.st_mode & 0777) == 0) {
+            int pid = fork();
+            if (pid < 0) {
+                printf("Error during the creation process for malicious verification.");
+                return -1;
+            } else if (pid == 0) {
+                execl("./verify_for_malicious.sh", "verify_for_malicious.sh", path_file, (char *)NULL);
+                exit(-1);
+            } else {
+                int status;
+                waitpid(pid, &status, 0);
+                int exit_status = WEXITSTATUS(status);
+                if (exit_status == 255) {
+                    printf("Error during the malicious verification.");
+                    return -1;
+                } else if (exit_status == 1) {
+                    char moved_path_file[strlen(isolated_space)+strlen(path_file)+2];
+                    strcpy(moved_path_file, isolated_space);
+                    if (moved_path_file[strlen(moved_path_file)-1]!=SEP[0]) strcat(moved_path_file, SEP);
+                    strcat(moved_path_file, path_file);
+                    if (rename(path_file, moved_path_file) != 0) {
+                        printf("Error during the move of file %s.", path_file);
+                        return -1;
+                    } 
+                    continue;
+                }
+            }
+        }
+
         if (S_ISDIR(stats.st_mode)) {
             if (!initialize) {
                 char next_snapshot_path[strlen(path_file)+13];
@@ -150,7 +179,7 @@ int compareMetadata(const char* dir_path, const int origin_path_length, FILE* ou
                 FILE* temp = fopen(next_snapshot_path, "a");
                 fclose(temp);
             }
-            compareMetadata(path_file, origin_path_length, output);
+            compareMetadata(path_file, origin_path_length, output, isolated_space);
         }
         bool isFileSaved = false;
         int length = 1;
@@ -207,6 +236,7 @@ int main(int argc, char *argv[]) {
     int lpid[argc-1];
     if(argc >= 2) {
         FILE* output = NULL;
+        char isolated_space[PATH_MAX+1];
         if (strcmp(argv[1], "-o") == 0) {
             switch (argc) {
             case 2:
@@ -219,6 +249,44 @@ int main(int argc, char *argv[]) {
             }
             start = 3;
             output = fopen(argv[2], "w");
+            if (strcmp(argv[3], "-s") == 0) {
+                switch (argc) {
+                case 4:
+                    printf("No isolated space specified.\n");
+                    return -1;
+                
+                case 5:
+                    printf("No input specified.\n");
+                    return -1;
+                }
+                start = 5;
+                strcpy(isolated_space, argv[4]);
+            }
+        } else if (strcmp(argv[1], "-s") == 0) {
+            switch (argc) {
+            case 2:
+                printf("No isolated space specified.\n");
+                return -1;
+
+            case 3:
+                printf("No input specified.\n");
+                return -1;
+            }
+            start = 3;
+            strcpy(isolated_space, argv[2]);
+            if (strcmp(argv[3], "-o") == 0) {
+                switch (argc) {
+                case 4:
+                    printf("No output specified.\n");
+                    return -1;
+                
+                case 5:
+                    printf("No input specified.\n");
+                    return -1;
+                }
+                start = 5;
+                output = fopen(argv[4], "w");
+            }
         }
         for (int i = start; i < argc; i++) {
             int pid = fork();
@@ -231,10 +299,8 @@ int main(int argc, char *argv[]) {
                 if (argv[1][strlen(argv[i]-1)] == SEP[0]) length = strlen(argv[i]);
                 else length = strlen(argv[i]) + 1;
                 int error;
-                if ((error = compareMetadata(argv[i], length, output)) != 0) {
+                if ((error = compareMetadata(argv[i], length, output, isolated_space)) != 0) {
                     printf("Error during the creation of snapshot for directory %s.\n", argv[i]);
-                    printf("%d\n", error);
-                    error=-2;
                     exit(error);
                 } else {
                     printf("Snapshot for directory %s created succesfully.\n", argv[i]);
@@ -250,7 +316,9 @@ int main(int argc, char *argv[]) {
     for (int i = 0; i < argc - start; i++) {
         int status;
         int wpid = waitpid(lpid[i], &status, 0);
-        printf("Child Process %d terminated with PID %d and exit code %d.\n", i+1, wpid, WEXITSTATUS(status));
+        int exit_code = WEXITSTATUS(status);
+        if (exit_code > 127) exit_code -= 256;
+        printf("Child Process %d terminated with PID %d and exit code %d.\n", i+1, wpid, exit_code);
     }
 
     return 0;
