@@ -144,14 +144,23 @@ int compareMetadata(const char* dir_path, const int origin_path_length, FILE* ou
         struct stat stats;
         lstat(path_file, &stats);
         if ((stats.st_mode & 0777) == 0) {
+            int pipe_fd[2];
+            if (pipe(pipe_fd) == -1) {
+                printf("Error during the creation of the pipe for the malicious verification.");
+                return -1;
+            }
             int pid = fork();
             if (pid < 0) {
                 printf("Error during the creation process for malicious verification.");
                 return -1;
             } else if (pid == 0) {
+                close(pipe_fd[0]);
+                dup2(pipe_fd[1], STDOUT_FILENO);
+                close(pipe_fd[1]);
                 execl("./verify_for_malicious.sh", "verify_for_malicious.sh", path_file, (char *)NULL);
                 exit(-1);
             } else {
+                close(pipe_fd[1]);
                 int status;
                 waitpid(pid, &status, 0);
                 int exit_status = WEXITSTATUS(status);
@@ -159,15 +168,20 @@ int compareMetadata(const char* dir_path, const int origin_path_length, FILE* ou
                     printf("Error during the malicious verification.");
                     return -1;
                 } else if (exit_status == 1) {
-                    char moved_path_file[strlen(isolated_space)+strlen(path_file)+2];
-                    strcpy(moved_path_file, isolated_space);
-                    if (moved_path_file[strlen(moved_path_file)-1]!=SEP[0]) strcat(moved_path_file, SEP);
-                    strcat(moved_path_file, path_file);
-                    if (rename(path_file, moved_path_file) != 0) {
-                        printf("Error during the move of file %s.", path_file);
-                        return -1;
-                    } 
-                    continue;
+                    const buff_size = strlen(path_file)+1;
+                    char message[buff_size];
+                    read(pipe_fd[0], message, buff_size);
+                    if (strcmp(message, "SAFE") != 0) {
+                        char moved_path_file[strlen(isolated_space)+strlen(path_file)+2];
+                        strcpy(moved_path_file, isolated_space);
+                        if (moved_path_file[strlen(moved_path_file)-1]!=SEP[0]) strcat(moved_path_file, SEP);
+                        strcat(moved_path_file, path_file);
+                        if (rename(path_file, moved_path_file) != 0) {
+                            printf("Error during the move of file %s.", path_file);
+                            return -1;
+                        } 
+                        continue;
+                    }
                 }
             }
         }
