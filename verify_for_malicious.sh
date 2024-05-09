@@ -1,29 +1,35 @@
 #!/bin/bash
 
-syntactic_analysis() {
-    file="$1"
-    num_lines=$(wc -l < "$file")
-    num_words=$(wc -w < "$file")
-    num_chars=$(wc -c < "$file")
+file="$1"
+
+check_dangerous() {
+    if [[ $(grep -P "[^\x00-\x7F]" "$file") ]]; then
+        echo "$file"
+        return 1
+    fi
 
     if grep -qE 'corrupted|dangerous|risk|attack|malware|malicious' "$file"; then
-        exit 1
+        echo "$file"
+        return 1
     fi
 
-    if LC_ALL=C grep -q '[^[:print:]]' "$file"; then
-        exit 1
-    fi
-
-    exit 0
+    return 0
 }
 
 main() {
-    if [ "$#" -ne 1 ]; then
-        echo "Usage: $0 file_to_check"
+    if [[ ! -e "$file" ]]; then
+        echo "File does not exist."
         exit 1
     fi
 
-    syntactic_analysis "$1"
+    if [[ $(wc -l < "$file") -lt 3 ]]; then
+        if [[ $(wc -w < "$file") -gt 1000 && $(wc -c < "$file") -gt 2000 ]]; then
+            check_dangerous
+            if [[ $? -eq 0 ]]; then
+                echo "SAFE"
+            fi
+        fi
+    fi
 }
 
-main "$@"
+main
