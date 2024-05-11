@@ -168,7 +168,7 @@ int compareMetadata(const char* dir_path, const int origin_path_length, FILE* ou
                     printf("Error during the malicious verification.");
                     return -1;
                 } else if (exit_status == 1) {
-                    const buff_size = strlen(path_file)+1;
+                    const int buff_size = strlen(path_file)+1;
                     char message[buff_size];
                     read(pipe_fd[0], message, buff_size);
                     if (strcmp(message, "SAFE") != 0) {
