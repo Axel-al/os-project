@@ -45,7 +45,7 @@ Metadata* parse_file(FILE* file) {
         if (metadata == NULL || sscanf(metadata, "- Permissions: %5s, Owner: %4s, Modify: %[^,], Size: %[^\n]\n", 
             fileInfo[count].permissions, fileInfo[count].owner, fileInfo[count].modify, fileInfo[count].size) != 4) {
             
-            printf("Error for line: %s", line);
+            printf("Error for line: %s\n", line);
             continue;
         }
         int filename_length = metadata - line - 1;
@@ -146,12 +146,12 @@ int compareMetadata(const char* dir_path, const int origin_path_length, FILE* ou
         if ((stats.st_mode & 0777) == 0) {
             int pipe_fd[2];
             if (pipe(pipe_fd) == -1) {
-                printf("Error during the creation of the pipe for the malicious verification.");
+                printf("Error during the creation of the pipe for the malicious verification.\n");
                 return -1;
             }
             int pid = fork();
             if (pid < 0) {
-                printf("Error during the creation process for malicious verification.");
+                printf("Error during the creation process for malicious verification.\n");
                 return -1;
             } else if (pid == 0) {
                 close(pipe_fd[0]);
@@ -165,7 +165,7 @@ int compareMetadata(const char* dir_path, const int origin_path_length, FILE* ou
                 waitpid(pid, &status, 0);
                 int exit_status = WEXITSTATUS(status);
                 if (exit_status == 255) {
-                    printf("Error during the malicious verification.");
+                    printf("Error during the malicious verification.\n");
                     return -1;
                 } else if (exit_status == 1) {
                     const int buff_size = strlen(path_file)+1;
@@ -177,7 +177,7 @@ int compareMetadata(const char* dir_path, const int origin_path_length, FILE* ou
                         if (moved_path_file[strlen(moved_path_file)-1]!=SEP[0]) strcat(moved_path_file, SEP);
                         strcat(moved_path_file, path_file);
                         if (rename(path_file, moved_path_file) != 0) {
-                            printf("Error during the move of file %s.", path_file);
+                            printf("Error during the move of file %s.\n", path_file);
                             return -1;
                         } 
                         continue;
